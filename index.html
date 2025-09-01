@@ -116,6 +116,59 @@
     function reflectVec(vx,vy,px,py,A,B){ const nx=px/(A*A),ny=py/(B*B),nlen=Math.hypot(nx,ny)||1,ux=nx/nlen,uy=ny/nlen,d=vx*ux+vy*uy; return {x:(vx-2*d*ux), y:(vy-2*d*uy)}; }
 
     // ====== Game helpers ======
+// ====== Power Gauge ======
+function getAimPower(){
+  // ドラッグで狙っている間だけ計算
+  if(!aiming?.active) return 0;
+  const dx = aiming.sx - aiming.mx, dy = aiming.sy - aiming.my;
+  const dist = Math.hypot(dx, dy);
+  return Math.min(MAX_POWER, dist * 8);  // 既存の MAX_POWER を使用
+}
+
+function drawPowerGauge(){
+  // ドラッグ中のみ表示
+  if(!aiming?.active) return;
+
+  const power = getAimPower();
+  const pct   = power / Math.max(1, MAX_POWER);
+
+  // キャンバス左上の少し下（HUDとかぶらないように）
+  const x = 20, y = 68, w = 220, h = 14;
+
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+
+  // 背景パネル
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x-4, y-4, w+8, h+8);
+
+  // バー土台
+  ctx.fillStyle = 'rgba(15,23,42,0.95)';
+  ctx.fillRect(x, y, w, h);
+
+  // バー本体（緑→黄→赤のグラデ）
+  const g = ctx.createLinearGradient(x, y, x + w, y);
+  g.addColorStop(0,   '#22c55e');
+  g.addColorStop(0.5, '#f59e0b');
+  g.addColorStop(1,   '#ef4444');
+  ctx.fillStyle = g;
+  ctx.fillRect(x, y, Math.max(2, Math.floor(w * pct)), h);
+
+  // 枠線
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  // テキスト
+  ctx.fillStyle = '#e5e7eb';
+  ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Power: ' + Math.round(pct * 100) + '%', x, y + h + 14);
+
+  ctx.restore();
+}
+
     function rack(){
       const cue={id:0,x:-c*0.9,y:0,vx:0,vy:0,r:R,m:1,color:'#f1f5f9',isCue:true};
       const gap = R*2.05; const headX = +c*0.55, headY = 0;
@@ -168,7 +221,7 @@
     }
 
     // ====== Rendering ======
-    function draw(){ ctx.clearRect(0,0,W,H); ctx.fillStyle='#0a5a2c'; ctx.fillRect(0,0,W,H); ctx.save(); ctx.translate(cx,cy); ctx.beginPath(); ctx.ellipse(0,0,a,b,0,0,Math.PI*2); ctx.strokeStyle='#77e0ff'; ctx.lineWidth=3; ctx.stroke(); for(const pk of pockets){ ctx.fillStyle='#0f172a'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R+3,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#020617'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R,0,Math.PI*2); ctx.fill(); } const fcs = Math.sqrt(Math.max(0,a*a-b*b)); ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(-fcs,0,4,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc( fcs,0,4,0,Math.PI*2); ctx.fill(); const targetId = shotActive ? (requiredLowest ?? lowest()) : lowest(); if(targetId!=null){ const tb=balls.find(b=>b.id===targetId); if(tb){ const pulse = 1 + 0.15*Math.sin(performance.now()/250); ctx.save(); ctx.globalAlpha=0.9; ctx.strokeStyle='#38bdf8'; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(tb.x, tb.y, tb.r*1.9*pulse, 0, Math.PI*2); ctx.stroke(); ctx.globalAlpha=0.35; ctx.lineWidth=10; ctx.beginPath(); ctx.arc(tb.x, tb.y, tb.r*2.6*pulse, 0, Math.PI*2); ctx.stroke(); ctx.restore(); } } for(const b of balls){ ctx.fillStyle=b.color; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); if(!b.isCue && b.label){ ctx.fillStyle='#fff'; ctx.font='10px ui-monospace,Menlo,monospace'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(b.label, b.x, b.y+0.5); } if(b.isCue){ ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1; ctx.stroke(); } } ctx.restore(); drawGuides(); updateTargetLabel(); }
+    function draw(){ ctx.clearRect(0,0,W,H); ctx.fillStyle='#0a5a2c'; ctx.fillRect(0,0,W,H); ctx.save(); ctx.translate(cx,cy); ctx.beginPath(); ctx.ellipse(0,0,a,b,0,0,Math.PI*2); ctx.strokeStyle='#77e0ff'; ctx.lineWidth=3; ctx.stroke(); for(const pk of pockets){ ctx.fillStyle='#0f172a'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R+3,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#020617'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R,0,Math.PI*2); ctx.fill(); } const fcs = Math.sqrt(Math.max(0,a*a-b*b)); ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(-fcs,0,4,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc( fcs,0,4,0,Math.PI*2); ctx.fill(); const targetId = shotActive ? (requiredLowest ?? lowest()) : lowest(); if(targetId!=null){ const tb=balls.find(b=>b.id===targetId); if(tb){ const pulse = 1 + 0.15*Math.sin(performance.now()/250); ctx.save(); ctx.globalAlpha=0.9; ctx.strokeStyle='#38bdf8'; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(tb.x, tb.y, tb.r*1.9*pulse, 0, Math.PI*2); ctx.stroke(); ctx.globalAlpha=0.35; ctx.lineWidth=10; ctx.beginPath(); ctx.arc(tb.x, tb.y, tb.r*2.6*pulse, 0, Math.PI*2); ctx.stroke(); ctx.restore(); } } for(const b of balls){ ctx.fillStyle=b.color; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); if(!b.isCue && b.label){ ctx.fillStyle='#fff'; ctx.font='10px ui-monospace,Menlo,monospace'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(b.label, b.x, b.y+0.5); } if(b.isCue){ ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1; ctx.stroke(); } } ctx.restore(); drawGuides();drawPowerGauge();   updateTargetLabel(); }
 
     // ====== Main loop ======
     function loop(t){ const dt=Math.min(0.03, (t-last)/1000 || 0.016); last=t||0; if(running) update(dt); draw(); requestAnimationFrame(loop); }

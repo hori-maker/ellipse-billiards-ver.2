@@ -24,7 +24,7 @@
     .card .sub { opacity:.8; font-size:13px; margin-bottom:12px; }
     .btn { background:#22c55e; color:#052e12; border:none; border-radius:10px; padding:8px 12px; font-weight:600; cursor:pointer; }
     .btn:hover { filter:brightness(1.05); }
-    canvas { display:block; background:#0a5a2c; touch-action:none; } /* ← iPadでの誤スクロール防止 */
+    canvas { display:block; background:#0a5a2c; touch-action:none; }
     label.pill input { accent-color:#0ea5e9; }
   </style>
 </head>
@@ -49,6 +49,8 @@
         </div>
         <button id="pauseBtn">一時停止</button>
         <button id="rackBtn">R: 初期配置</button>
+        <button id="mode2p"  class="btn" style="background:#10b981;color:#052e12;">対戦(2P)</button>
+        <button id="modecpu" class="btn" style="background:#3b82f6;color:#0b1220;">1P vs CPU</button>
       </div>
     </div>
     <div class="panel">
@@ -66,409 +68,305 @@
     </div>
   </div>
 
-  <script>
-    // ====== Geometry & Physics ======
-    const W=900,H=620,cx=W/2,cy=H/2,a=360,b=240;
-    const c=Math.sqrt(Math.max(0,a*a-b*b));
-    const R=9,MU=0.85,RESTITUTION=0.96,CUSHION_REST=0.92,MAX_POWER=820,POCKET_R=18;
-    const pocketAngles=[0,Math.PI/3,2*Math.PI/3,Math.PI,4*Math.PI/3,5*Math.PI/3];
-    const pockets=pocketAngles.map(th=>({x:a*Math.cos(th),y:b*Math.sin(th)}));
-    const colors9=['#ffd700','#0000ff','#ff0000','#9400d3','#ffa500','#00ff00','#800000','#000000','#1e90ff'];
+<script>
+/* ===== Geometry & Physics ===== */
+const W=900,H=620,cx=W/2,cy=H/2,a=360,b=240;
+const c=Math.sqrt(Math.max(0,a*a-b*b));
+const R=9,MU=0.85,RESTITUTION=0.96,CUSHION_REST=0.92,MAX_POWER=820,POCKET_R=18;
+const pocketAngles=[0,Math.PI/3,2*Math.PI/3,Math.PI,4*Math.PI/3,5*Math.PI/3];
+const pockets=pocketAngles.map(th=>({x:a*Math.cos(th),y:b*Math.sin(th)}));
+const colors9=['#ffd700','#0000ff','#ff0000','#9400d3','#ffa500','#00ff00','#800000','#000000','#1e90ff'];
 
-    // ====== DOM ======
-    const canvas=document.getElementById('table'), ctx=canvas.getContext('2d');
-    const p1nameEl=document.getElementById('p1name'), p2nameEl=document.getElementById('p2name');
-    const p1scoreEl=document.getElementById('p1score'), p2scoreEl=document.getElementById('p2score');
-    const msgEl=document.getElementById('msg'), pauseBtn=document.getElementById('pauseBtn'), rackBtn=document.getElementById('rackBtn');
-    const bihBanner=document.getElementById('bih'), targetEl=document.getElementById('targetNum');
-    const guideToggle=document.getElementById('guideToggle');
-    const modal=document.getElementById('modal'), modalTitle=document.getElementById('modalTitle'), modalSub=document.getElementById('modalSub'), nextBtn=document.getElementById('nextBtn');
+/* ===== DOM ===== */
+const canvas=document.getElementById('table'), ctx=canvas.getContext('2d');
+const p1nameEl=document.getElementById('p1name'), p2nameEl=document.getElementById('p2name');
+const p1scoreEl=document.getElementById('p1score'), p2scoreEl=document.getElementById('p2score');
+const msgEl=document.getElementById('msg'), pauseBtn=document.getElementById('pauseBtn'), rackBtn=document.getElementById('rackBtn');
+const bihBanner=document.getElementById('bih'), targetEl=document.getElementById('targetNum');
+const guideToggle=document.getElementById('guideToggle');
+const modal=document.getElementById('modal'), modalTitle=document.getElementById('modalTitle'), modalSub=document.getElementById('modalSub'), nextBtn=document.getElementById('nextBtn');
 
-    // ====== State ======
-    let balls=[]; // {id,x,y,vx,vy,r,m,color,isCue,label}
-    let running=true, aiming=null, last=0, ballInHand=false, shotActive=false;
-    let firstContact=null, pocketedThisShot=[];
-    let requiredLowest=null, touchedRequired=false;
-    let p1Score=0,p2Score=0,currentPlayer=1;
-    let gameOver=false, lastWinner=1;
+/* ===== State ===== */
+let balls=[]; // {id,x,y,vx,vy,r,m,color,isCue,label}
+let running=true, aiming=null, last=0, ballInHand=false, shotActive=false;
+let firstContact=null, pocketedThisShot=[];
+let requiredLowest=null, touchedRequired=false;
+let p1Score=0,p2Score=0,currentPlayer=1;
+let gameOver=false, lastWinner=1;
 
-    function playerName(p){return p===1?p1nameEl.value:p2nameEl.value;}
-    function addScore(p,d){ if(p===1){ p1Score=Math.max(0,p1Score+d); p1scoreEl.textContent=p1Score; } else { p2Score=Math.max(0,p2Score+d); p2scoreEl.textContent=p2Score; } }
-    function allStopped(th=2){ return balls.every(b=>Math.hypot(b.vx,b.vy)<th); }
-    function lowest(){ const ids=balls.filter(b=>!b.isCue).map(b=>b.id); return ids.length?Math.min(...ids):null; }
-    function setTurnDisplay(p){ p1scoreEl.classList.toggle('turn', p===1); p2scoreEl.classList.toggle('turn', p===2); }
-    function switchTurn(){ currentPlayer=currentPlayer===1?2:1; setTurnDisplay(currentPlayer); }
-    function setMsg(t){ msgEl.textContent=t; }
-    function setBIHBanner(show){ bihBanner.style.display = show ? 'block' : 'none'; }
-    function updateTargetLabel(){ 
-      const t = shotActive ? ((requiredLowest != null) ? requiredLowest : lowest()) : lowest(); 
-      targetEl.textContent = (t != null) ? t : '-'; 
+/* CPU */
+let aiEnabled=false, cpuBusy=false;
+
+function playerName(p){return p===1?p1nameEl.value:p2nameEl.value;}
+function addScore(p,d){ if(p===1){ p1Score=Math.max(0,p1Score+d); p1scoreEl.textContent=p1Score; } else { p2Score=Math.max(0,p2Score+d); p2scoreEl.textContent=p2Score; } }
+function allStopped(th=2){ return balls.every(b=>Math.hypot(b.vx,b.vy)<th); }
+function lowest(){ const ids=balls.filter(b=>!b.isCue).map(b=>b.id); return ids.length?Math.min(...ids):null; }
+function setTurnDisplay(p){ p1scoreEl.classList.toggle('turn', p===1); p2scoreEl.classList.toggle('turn', p===2); }
+function switchTurn(){ currentPlayer=currentPlayer===1?2:1; setTurnDisplay(currentPlayer); }
+function setMsg(t){ msgEl.textContent=t; }
+function setBIHBanner(show){ bihBanner.style.display = show ? 'block' : 'none'; }
+function updateTargetLabel(){ const t = shotActive ? (requiredLowest ?? lowest()) : lowest(); targetEl.textContent = (t!=null)?t:'-'; }
+
+function openModal(title, sub){ modalTitle.textContent=title; modalSub.textContent=sub||''; modal.style.display='flex'; gameOver=true; running=false; }
+function closeModal(){ modal.style.display='none'; gameOver=false; running=true; }
+function showRackResult(reason){ let title; if(p1Score>p2Score){ lastWinner=1; title=`勝者: ${playerName(1)}`; } else if(p2Score>p1Score){ lastWinner=2; title=`勝者: ${playerName(2)}`; } else { lastWinner=(lastWinner===1?2:1); title='引き分け'; } const sub=`${reason}  ${playerName(1)}:${p1Score} - ${playerName(2)}:${p2Score}`; openModal(title,sub); }
+
+/* ===== Math helpers ===== */
+function addv(ax,ay,bx,by){ return {x:ax+bx,y:ay+by}; }
+function inside(x,y,A=a,B=b){ return (x*x)/(A*A)+(y*y)/(B*B) <= 1; }
+function project(x,y,A=a,B=b){ const f=(x*x)/(A*A)+(y*y)/(B*B); if(f===0) return {x:0,y:0}; const s=1/Math.sqrt(f); return {x:x*s,y:y*s}; }
+function reflect(vx,vy,bx,by,A,B){ const nx=bx/(A*A),ny=by/(B*B),nlen=Math.hypot(nx,ny)||1,ux=nx/nlen,uy=ny/nlen,d=vx*ux+vy*uy; return {vx:(vx-2*d*ux)*CUSHION_REST, vy:(vy-2*d*uy)*CUSHION_REST}; }
+function rayEllipse(p, v, A, B){ const a0=(v.x*v.x)/(A*A)+(v.y*v.y)/(B*B); const b0=2*((p.x*v.x)/(A*A)+(p.y*v.y)/(B*B)); const c0=(p.x*p.x)/(A*A)+(p.y*p.y)/(B*B)-1; const disc=b0*b0-4*a0*c0; if(disc<0||a0===0) return null; const s=Math.sqrt(disc); const t1=(-b0-s)/(2*a0), t2=(-b0+s)/(2*a0); const t=t1>1e-6?t1:(t2>1e-6?t2:null); if(t==null) return null; return {t, hit:addv(p.x,p.y, v.x*t, v.y*t)}; }
+function reflectVec(vx,vy,px,py,A,B){ const nx=px/(A*A),ny=py/(B*B),nlen=Math.hypot(nx,ny)||1,ux=nx/nlen,uy=ny/nlen,d=vx*ux+vy*uy; return {x:(vx-2*d*ux), y:(vy-2*d*uy)}; }
+
+/* ===== Power Gauge ===== */
+function getAimPower(){
+  if(!(aiming && aiming.active)) return 0;
+  const dx=aiming.sx-aiming.mx, dy=aiming.sy-aiming.my;
+  const dist=Math.hypot(dx,dy);
+  return Math.min(MAX_POWER, dist*8);
+}
+function drawPowerGauge(){
+  if(!(aiming && aiming.active)) return;
+  const power=getAimPower(), pct=power/Math.max(1,MAX_POWER);
+  const x=20,y=68,w=220,h=14;
+  ctx.save(); ctx.globalAlpha=0.9;
+  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(x-4,y-4,w+8,h+8);
+  ctx.fillStyle='rgba(15,23,42,0.95)'; ctx.fillRect(x,y,w,h);
+  const g=ctx.createLinearGradient(x,y,x+w,y); g.addColorStop(0,'#22c55e'); g.addColorStop(0.5,'#f59e0b'); g.addColorStop(1,'#ef4444');
+  ctx.fillStyle=g; ctx.fillRect(x,y,Math.max(2,Math.floor(w*pct)),h);
+  ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1; ctx.strokeRect(x+0.5,y+0.5,w-1,h-1);
+  ctx.fillStyle='#e5e7eb'; ctx.font='12px ui-monospace, Menlo, Consolas, monospace'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText('Power: '+Math.round(pct*100)+'%', x, y+h+14);
+  ctx.restore();
+}
+
+/* ===== ラック ===== */
+function rack(){
+  const cue={id:0,x:-c*0.9,y:0,vx:0,vy:0,r:R,m:1,color:'#f1f5f9',isCue:true};
+  const gap=R*2.05, headX=+c*0.55, headY=0;
+  const diamond=[[0,0],[gap,-gap/2],[gap,+gap/2],[2*gap,-gap],[2*gap,0],[2*gap,+gap],[3*gap,-gap/2],[3*gap,+gap/2],[4*gap,0]];
+  const pos=diamond.map(d=>({x:headX+d[0], y:headY+d[1]}));
+  const objs=[];
+  objs.push({id:1, x:pos[0].x, y:pos[0].y, vx:0,vy:0,r:R,m:1,color:colors9[0],label:'1'});
+  objs.push({id:9, x:pos[4].x, y:pos[4].y, vx:0,vy:0,r:R,m:1,color:colors9[8],label:'9'});
+  const remain=[2,3,4,5,6,7,8]; for(let i=remain.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [remain[i],remain[j]]=[remain[j],remain[i]]; }
+  const slots=[1,2,3,5,6,7,8];
+  for(let k=0;k<remain.length;k++){ const id=remain[k], p=pos[slots[k]]; objs.push({id, x:p.x,y:p.y, vx:0,vy:0, r:R,m:1, color:colors9[id-1], label:String(id)}); }
+  balls=[cue, ...objs];
+  firstContact=null; pocketedThisShot=[]; shotActive=false; requiredLowest=null; touchedRequired=false;
+  setTurnDisplay(currentPlayer); setMsg('新ラック：最小番号から当ててね！'); setBIHBanner(false); ballInHand=false; updateTargetLabel();
+}
+window.rack = rack; // ← グローバル公開
+
+function spotBall(id){
+  const A=a-R,B=b-R;
+  const baseX=+c*0.55+2*R*2.05, baseY=0, gap=R*2.05;
+  const tryPts=[[baseX,baseY],[baseX+gap,baseY],[baseX-gap,baseY],[baseX,baseY+gap],[baseX,baseY-gap],[baseX+gap,baseY+gap/2],[baseX+gap,baseY-gap/2]];
+  function freeAt(x,y){ return balls.every(b=>Math.hypot(b.x-x,b.y-y)>=b.r+R+1); }
+  function place(x,y){ const idx=balls.findIndex(b=>b.id===id); if(idx>=0){ const b=balls[idx]; b.x=x; b.y=y; b.vx=b.vy=0; } }
+  for(const [x,y] of tryPts){ const f=(x*x)/(A*A)+(y*y)/(B*B); if(f<=1 && freeAt(x,y)){ place(x,y); return; } }
+  place(Math.min(Math.max(baseX,-A),A), Math.min(Math.max(baseY,-B),B));
+}
+
+/* ===== モード切替 ===== */
+function setMode(vsCpu){ aiEnabled=!!vsCpu; currentPlayer=1; setTurnDisplay(currentPlayer); setMsg(aiEnabled?'1P vs CPU モード':'2P対戦モード'); }
+document.getElementById('mode2p').addEventListener('click', ()=>setMode(false));
+document.getElementById('modecpu').addEventListener('click', ()=>setMode(true));
+
+/* ===== 入力 ===== */
+canvas.addEventListener('pointerdown', e=>{
+  const r=canvas.getBoundingClientRect(); const x=e.clientX-r.left-cx, y=e.clientY-r.top-cy;
+  const cue=balls.find(b=>b.isCue);
+  if(allStopped() && ballInHand && inside(x,y,a-R,b-R)){
+    cue.x=x; cue.y=y; cue.vx=cue.vy=0; ballInHand=false; setMsg('手球を配置しました'); setBIHBanner(false); updateTargetLabel(); return;
+  }
+  if(!allStopped() || gameOver) return;
+  if(Math.hypot(x-cue.x,y-cue.y)<=R*2.2){ aiming={active:true,sx:cue.x,sy:cue.y,mx:x,my:y}; }
+});
+window.addEventListener('pointermove', e=>{
+  if(!(aiming && aiming.active)) return;
+  const r=canvas.getBoundingClientRect(); aiming.mx=e.clientX-r.left-cx; aiming.my=e.clientY-r.top-cy;
+});
+window.addEventListener('pointerup', ()=>{
+  const aim=aiming; if(!(aim && aim.active)) return; aiming=null;
+  const cue=balls.find(b=>b.isCue); const dx=aim.sx-aim.mx, dy=aim.sy-aim.my, dist=Math.hypot(dx,dy);
+  const power=Math.min(MAX_POWER, dist*8); if(power<5) return;
+  const ux=dx/(dist||1), uy=dy/(dist||1); cue.vx=ux*power; cue.vy=uy*power;
+  requiredLowest=lowest(); touchedRequired=false; firstContact=null; pocketedThisShot=[]; shotActive=true;
+  setMsg(playerName(currentPlayer)+' のショット！'); updateTargetLabel();
+});
+window.addEventListener('keydown', e=>{
+  if(e.key===' '){ running=!running; pauseBtn.textContent=running?'一時停止':'再開'; }
+  if(e.key==='r'||e.key==='R'){ window.rack(); }
+});
+pauseBtn.addEventListener('click', ()=>{ running=!running; pauseBtn.textContent=running?'一時停止':'再開'; });
+rackBtn.addEventListener('click', ()=>window.rack());
+nextBtn.addEventListener('click', ()=>{ closeModal(); p1Score=0; p2Score=0; p1scoreEl.textContent='0'; p2scoreEl.textContent='0'; currentPlayer=lastWinner; setTurnDisplay(currentPlayer); window.rack(); });
+
+/* ===== CPU ===== */
+function maybeCpuShoot(){
+  if(!aiEnabled || gameOver || currentPlayer!==2 || shotActive) return;
+  if(ballInHand){
+    const cue=balls.find(b=>b.isCue);
+    if(cue){ cue.x=-c*0.6; cue.y=0; cue.vx=cue.vy=0; ballInHand=false; setBIHBanner(false); setMsg('CPUが手球を配置しました'); }
+  }
+  if(!allStopped() || cpuBusy) return;
+  cpuBusy=true;
+  setTimeout(()=>{ try{ cpuTakeShot(); } finally{ cpuBusy=false; } },700);
+}
+function cpuTakeShot(){
+  const cue=balls.find(b=>b.isCue); const targetId=lowest(); if(!cue || targetId==null) return;
+  const tgt=balls.find(b=>b.id===targetId); if(!tgt) return;
+  let dx=tgt.x-cue.x, dy=tgt.y-cue.y; const dist=Math.hypot(dx,dy)||1; dx/=dist; dy/=dist;
+  const spread=0.06; dx += (Math.random()*2-1)*spread; dy += (Math.random()*2-1)*spread; const n=Math.hypot(dx,dy)||1; dx/=n; dy/=n;
+  const basePower=Math.min(MAX_POWER*0.6, Math.max(200, dist*2.2)); const power=basePower*(0.85+Math.random()*0.3);
+  cue.vx=dx*power; cue.vy=dy*power;
+  requiredLowest=lowest(); touchedRequired=false; firstContact=null; pocketedThisShot=[]; shotActive=true;
+  setMsg(p2nameEl.value+'（CPU）のショット！'); updateTargetLabel();
+}
+
+/* ===== Simulation ===== */
+function update(dt){
+  const A=a-R,B=b-R; const sunk=[];
+  for(const ball of balls){
+    const damp=Math.exp(-MU*dt); ball.vx*=damp; ball.vy*=damp;
+    let nx=ball.x+ball.vx*dt, ny=ball.y+ball.vy*dt;
+
+    // ポケット判定（口に入ったら即落球）
+    let willSink=false;
+    for(let p=0;p<pockets.length;p++){
+      const pk=pockets[p]; if(Math.hypot(nx-pk.x,ny-pk.y)<POCKET_R-1){ willSink=true; break; }
     }
+    if(willSink){ sunk.push(ball.id); continue; }
 
-    function openModal(title, sub){ modalTitle.textContent = title; modalSub.textContent = sub || ''; modal.style.display = 'flex'; gameOver = true; running = false; }
-    function closeModal(){ modal.style.display = 'none'; gameOver = false; running = true; }
-    function showRackResult(reason){ let title, sub; if(p1Score>p2Score){ lastWinner=1; title=`勝者: ${playerName(1)}`; } else if(p2Score>p1Score){ lastWinner=2; title=`勝者: ${playerName(2)}`; } else { lastWinner=(lastWinner===1?2:1); title='引き分け'; } sub = `${reason}  ${playerName(1)}:${p1Score} - ${playerName(2)}:${p2Score}`; openModal(title, sub); }
-
-    // ====== Math helpers ======
-    function add(ax,ay,bx,by){ return {x:ax+bx,y:ay+by}; }
-    function norm(ax,ay){ const d=Math.hypot(ax,ay)||1; return {x:ax/d,y:ay/d}; }
-    function inside(x,y,A=a,B=b){ return (x*x)/(A*A)+(y*y)/(B*B) <= 1; }
-    function project(x,y,A=a,B=b){ const f=(x*x)/(A*A)+(y*y)/(B*B); if(f===0) return {x:0,y:0}; const s=1/Math.sqrt(f); return {x:x*s,y:y*s}; }
-    function reflect(vx,vy,bx,by,A,B){ const nx=bx/(A*A),ny=by/(B*B),nlen=Math.hypot(nx,ny)||1,ux=nx/nlen,uy=ny/nlen,d=vx*ux+vy*uy; return {vx:(vx-2*d*ux)*CUSHION_REST,vy:(vy-2*d*uy)*CUSHION_REST}; }
-    function rayEllipse(p, v, A, B){ const a0 = (v.x*v.x)/(A*A) + (v.y*v.y)/(B*B); const b0 = 2*((p.x*v.x)/(A*A) + (p.y*v.y)/(B*B)); const c0 = (p.x*p.x)/(A*A) + (p.y*p.y)/(B*B) - 1; const disc = b0*b0 - 4*a0*c0; if(disc < 0 || a0===0) return null; const s = Math.sqrt(disc); const t1 = (-b0 - s)/(2*a0), t2 = (-b0 + s)/(2*a0); const t = (t1>1e-6 ? t1 : (t2>1e-6 ? t2 : null)); if(t==null) return null; return { t, hit: add(p.x,p.y, v.x*t, v.y*t) }; }
-    function reflectVec(vx,vy,px,py,A,B){ const nx=px/(A*A),ny=py/(B*B),nlen=Math.hypot(nx,ny)||1,ux=nx/nlen,uy=ny/nlen,d=vx*ux+vy*uy; return {x:(vx-2*d*ux), y:(vy-2*d*uy)}; }
-
-    // ====== Game helpers ======
-    // ====== Power Gauge ======
-    function getAimPower(){
-      // ドラッグで狙っている間だけ計算（古いSafari互換）
-      if(!aiming || !aiming.active) return 0;
-      const dx = aiming.sx - aiming.mx, dy = aiming.sy - aiming.my;
-      const dist = Math.hypot(dx, dy);
-      return Math.min(MAX_POWER, dist * 8);
-    }
-
-    function drawPowerGauge(){
-      // ドラッグ中のみ表示（古いSafari互換）
-      if(!aiming || !aiming.active) return;
-
-      const power = getAimPower();
-      const pct   = power / Math.max(1, MAX_POWER);
-
-      // キャンバス左上の少し下（HUDとかぶらないように）
-      const x = 20, y = 68, w = 220, h = 14;
-
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-
-      // 背景パネル
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(x-4, y-4, w+8, h+8);
-
-      // バー土台
-      ctx.fillStyle = 'rgba(15,23,42,0.95)';
-      ctx.fillRect(x, y, w, h);
-
-      // バー本体（緑→黄→赤のグラデ）
-      const g = ctx.createLinearGradient(x, y, x + w, y);
-      g.addColorStop(0,   '#22c55e');
-      g.addColorStop(0.5, '#f59e0b');
-      g.addColorStop(1,   '#ef4444');
-      ctx.fillStyle = g;
-      ctx.fillRect(x, y, Math.max(2, Math.floor(w * pct)), h);
-
-      // 枠線
-      ctx.strokeStyle = '#94a3b8';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-      // テキスト
-      ctx.fillStyle = '#e5e7eb';
-      ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Power: ' + Math.round(pct * 100) + '%', x, y + h + 14);
-
-      ctx.restore();
-    }
-
-    function rack(){
-      const cue={id:0,x:-c*0.9,y:0,vx:0,vy:0,r:R,m:1,color:'#f1f5f9',isCue:true};
-      const gap = R*2.05; const headX = +c*0.55, headY = 0;
-      const diamondOffsets = [ [0,0], [gap,-gap/2],[gap,+gap/2], [2*gap,-gap],[2*gap,0],[2*gap,+gap], [3*gap,-gap/2],[3*gap,+gap/2], [4*gap,0] ];
-      const positions = diamondOffsets.map(function(d){ return { x: headX + d[0], y: headY + d[1] }; });
-      const objs=[];
-      objs.push({ id:1, x:positions[0].x, y:positions[0].y, vx:0, vy:0, r:R, m:1, color:colors9[0], label:'1' });
-      objs.push({ id:9, x:positions[4].x, y:positions[4].y, vx:0, vy:0, r:R, m:1, color:colors9[8], label:'9' });
-      const remainIds=[2,3,4,5,6,7,8];
-      for(let i=remainIds.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const tmp=remainIds[i]; remainIds[i]=remainIds[j]; remainIds[j]=tmp; }
-      const remainSlots=[1,2,3,5,6,7,8];
-      for(let k=0;k<remainIds.length;k++){
-        const id=remainIds[k], idx=remainSlots[k], p=positions[idx], color=colors9[id-1];
-        objs.push({ id, x:p.x, y:p.y, vx:0, vy:0, r:R, m:1, color, label:String(id) });
+    // クッション or 通常移動
+    const f=(nx*nx)/(A*A)+(ny*ny)/(B*B);
+    if(f>1){
+      let near=false;
+      for(let p=0;p<pockets.length;p++){
+        const pk=pockets[p]; if(Math.hypot(nx-pk.x,ny-pk.y)<POCKET_R+6){ near=true; break; }
       }
-      balls=[cue].concat(objs);
-      firstContact=null; pocketedThisShot=[]; shotActive=false; requiredLowest=null; touchedRequired=false;
-      setTurnDisplay(currentPlayer); setMsg('新ラック：最小番号から当ててね！'); setBIHBanner(false); ballInHand=false; updateTargetLabel();
-    }
+      if(near){ sunk.push(ball.id); }
+      else { const pb=project(nx,ny,A,B), rv=reflect(ball.vx,ball.vy,pb.x,pb.y,A,B); ball.vx=rv.vx; ball.vy=rv.vy; ball.x=pb.x*0.999; ball.y=pb.y*0.999; }
+    } else { ball.x=nx; ball.y=ny; }
 
-    function spotBall(id){
-      const A=a-R,B=b-R;
-      const baseX=+c*0.55+2*R*2.05, baseY=0; const gap=R*2.05;
-      const tryPoints=[[baseX,baseY],[baseX+gap,baseY],[baseX-gap,baseY],[baseX,baseY+gap],[baseX,baseY-gap],[baseX+gap,baseY+gap/2],[baseX+gap,baseY-gap/2]];
-      function freeAt(x,y){ return balls.every(b=>Math.hypot(b.x-x,b.y-y)>=b.r+R+1); }
-      function place(x,y){ const idx=balls.findIndex(b=>b.id===id); if(idx>=0){ const b=balls[idx]; b.x=x;b.y=y;b.vx=b.vy=0; } }
-      for(let i=0;i<tryPoints.length;i++){
-        const x=tryPoints[i][0], y=tryPoints[i][1];
-        const f=(x*x)/(A*A)+(y*y)/(B*B);
-        if(f<=1 && freeAt(x,y)){ place(x,y); return; }
+    if(Math.hypot(ball.vx,ball.vy)<1){ ball.vx=0; ball.vy=0; }
+  }
+
+  // 玉同士の衝突
+  for(let i=0;i<balls.length;i++){
+    for(let j=i+1;j<balls.length;j++){
+      const A1=balls[i], B1=balls[j];
+      const dx=B1.x-A1.x, dy=B1.y-A1.y, dist=Math.hypot(dx,dy), minDist=A1.r+B1.r;
+      if(dist>0 && dist<minDist){
+        const ux=dx/dist, uy=dy/dist, overlap=minDist-dist;
+        A1.x-=ux*(overlap/2); A1.y-=uy*(overlap/2); B1.x+=ux*(overlap/2); B1.y+=uy*(overlap/2);
+        const rvx=B1.vx-A1.vx, rvy=B1.vy-A1.vy, vn=rvx*ux+rvy*uy;
+        if(vn<0){ const e=RESTITUTION, j=-(1+e)*vn/(1/A1.m+1/B1.m), jx=j*ux, jy=j*uy; A1.vx-=jx/A1.m; A1.vy-=jy/A1.m; B1.vx+=jx/B1.m; B1.vy+=jy/B1.m; }
+
+        const cue=A1.isCue?A1:(B1.isCue?B1:null); const other=cue?(cue===A1?B1:A1):null;
+        if(cue && other && !other.isCue){ if(firstContact===null){ firstContact=other.id; } if(requiredLowest!=null && other.id===requiredLowest){ touchedRequired=true; } }
       }
-      place(Math.min(Math.max(baseX,-A),A), Math.min(Math.max(baseY,-B),B));
     }
+  }
 
-    // ====== Input ======
-    canvas.addEventListener('pointerdown', function(e){
-      const r=canvas.getBoundingClientRect();
-      const x=e.clientX-r.left-cx, y=e.clientY-r.top-cy;
-      const cue=balls.find(b=>b.isCue);
-      if(allStopped() && ballInHand && inside(x,y,a-R,b-R)){
-        cue.x=x; cue.y=y; cue.vx=cue.vy=0; ballInHand=false; setMsg('手球を配置しました'); setBIHBanner(false); updateTargetLabel(); return;
-      }
-      if(!allStopped() || gameOver) return;
-      if(Math.hypot(x-cue.x,y-cue.y)<=R*2.2){ aiming={active:true,sx:cue.x,sy:cue.y,mx:x,my:y}; }
-    });
-
-    window.addEventListener('pointermove', function(e){
-      if(!aiming || !aiming.active) return;
-      const r=canvas.getBoundingClientRect();
-      const x=e.clientX-r.left-cx, y=e.clientY-r.top-cy;
-      aiming.mx=x; aiming.my=y;
-    });
-
-    window.addEventListener('pointerup', function(){
-      const aim=aiming; if(!aim || !aim.active) return;
-      aiming=null;
-      const cue=balls.find(b=>b.isCue);
-      const dx=aim.sx-aim.mx, dy=aim.sy-aim.my, dist=Math.hypot(dx,dy);
-      const power=Math.min(MAX_POWER, dist*8); if(power<5) return;
-      const ux=dx/(dist||1), uy=dy/(dist||1);
-      cue.vx=ux*power; cue.vy=uy*power;
-      requiredLowest = lowest(); touchedRequired=false; firstContact=null; pocketedThisShot=[];
-      shotActive=true; setMsg((currentPlayer===1?p1nameEl.value:p2nameEl.value)+' のショット！'); updateTargetLabel();
-    });
-
-    window.addEventListener('keydown', function(e){
-      if(e.key===' '){ running=!running; pauseBtn.textContent = running? '一時停止' : '再開'; }
-      if(e.key==='r' || e.key==='R'){ rack(); }
-    });
-
-    const pauseHandler=function(){ running=!running; pauseBtn.textContent = running? '一時停止' : '再開'; };
-    pauseBtn.addEventListener('click', pauseHandler);
-    rackBtn.addEventListener('click', rack);
-    nextBtn.addEventListener('click', function(){
-      closeModal(); p1Score=0; p2Score=0; p1scoreEl.textContent='0'; p2scoreEl.textContent='0';
-      currentPlayer=lastWinner; setTurnDisplay(currentPlayer); rack();
-    });
-
-    // ====== Simulation ======
-    function update(dt){
-      const A=a-R,B=b-R; const sunk=[];
-      for(let i=0;i<balls.length;i++){
-        const ball=balls[i];
-        const damp=Math.exp(-MU*dt); ball.vx*=damp; ball.vy*=damp;
-        let nx=ball.x+ball.vx*dt, ny=ball.y+ball.vy*dt;
-
-        // ポケット判定
-        let willSink=false;
-        for(let p=0;p<pockets.length;p++){
-          const pk=pockets[p];
-          if(Math.hypot(nx-pk.x,ny-pk.y)<POCKET_R-1){ willSink=true; break; }
-        }
-        if(willSink){ sunk.push(ball.id); continue; }
-
-        // クッション反射 or 位置更新
-        const f=(nx*nx)/(A*A)+(ny*ny)/(B*B);
-        if(f>1){
-          let near=false;
-          for(let p=0;p<pockets.length;p++){
-            const pk=pockets[p];
-            if(Math.hypot(nx-pk.x,ny-pk.y)<POCKET_R+6){ near=true; break; }
-          }
-          if(near){
-            sunk.push(ball.id);
-          }else{
-            const pb=project(nx,ny,A,B), rv=reflect(ball.vx,ball.vy,pb.x,pb.y,A,B);
-            ball.vx=rv.vx; ball.vy=rv.vy; ball.x=pb.x*0.999; ball.y=pb.y*0.999;
-          }
+  // 落球
+  if(sunk.length){
+    sunk.sort((a,b)=>(a===0?-1:1));
+    for(const id of sunk){
+      const idx=balls.findIndex(b=>b.id===id);
+      if(idx>=0){
+        const b=balls[idx];
+        if(b.isCue){
+          addScore(currentPlayer,-1); b.x=-c*0.9; b.y=0; b.vx=0; b.vy=0;
+          setMsg('スクラッチ：-1点、相手に手球（テーブルをクリックで手球配置）'); ballInHand=true; setBIHBanner(true);
         } else {
-          ball.x=nx; ball.y=ny;
+          balls.splice(idx,1); pocketedThisShot.push(id);
         }
-
-        if(Math.hypot(ball.vx,ball.vy)<1){ ball.vx=0; ball.vy=0; }
-      }
-
-      // 玉同士の衝突
-      for(let i=0;i<balls.length;i++){
-        for(let j=i+1;j<balls.length;j++){
-          const A1=balls[i], B1=balls[j];
-          const dx=B1.x-A1.x, dy=B1.y-A1.y, dist=Math.hypot(dx,dy), minDist=A1.r+B1.r;
-          if(dist>0 && dist<minDist){
-            const ux=dx/dist, uy=dy/dist, overlap=minDist-dist;
-            A1.x-=ux*(overlap/2); A1.y-=uy*(overlap/2);
-            B1.x+=ux*(overlap/2); B1.y+=uy*(overlap/2);
-            const rvx=B1.vx-A1.vx, rvy=B1.vy-A1.vy, vn=rvx*ux+rvy*uy;
-            if(vn<0){
-              const e=RESTITUTION, j=-(1+e)*vn/(1/A1.m+1/B1.m), jx=j*ux, jy=j*uy;
-              A1.vx-=jx/A1.m; A1.vy-=jy/A1.m; B1.vx+=jx/B1.m; B1.vy+=jy/B1.m;
-            }
-            const cue=A1.isCue?A1:(B1.isCue?B1:null);
-            const other=cue?(cue===A1?B1:A1):null;
-            if(cue && other && !other.isCue){
-              if(firstContact===null){ firstContact = other.id; }
-              if(requiredLowest!=null && other.id===requiredLowest){ touchedRequired = true; }
-            }
-          }
-        }
-      }
-
-      // 落球処理
-      if(sunk.length){
-        sunk.sort(function(a,b){ return a===0?-1:1; });
-        for(let i=0;i<sunk.length;i++){
-          const id=sunk[i]; const idx=balls.findIndex(b=>b.id===id);
-          if(idx>=0){
-            const b=balls[idx];
-            if(b.isCue){
-              addScore(currentPlayer,-1);
-              b.x=-c*0.9; b.y=0; b.vx=0; b.vy=0;
-              setMsg('スクラッチ：-1点、相手に手球（テーブルをクリックで手球配置）');
-              ballInHand=true; setBIHBanner(true);
-            } else {
-              balls.splice(idx,1);
-              pocketedThisShot.push(id);
-            }
-          }
-        }
-      }
-
-      // ショット終了判定
-      if(shotActive && allStopped()){
-        const foul = (requiredLowest!=null && !touchedRequired);
-
-        if(foul){
-          if(pocketedThisShot.indexOf(9)!==-1){
-            const id=9;
-            if(!balls.some(function(bb){return bb.id===id;})){
-              const color=colors9[id-1];
-              balls.push({id:id, x:0, y:0, vx:0, vy:0, r:R, m:1, color:color, label:String(id)});
-            }
-            spotBall(9);
-          }
-          addScore(currentPlayer,-1);
-          setMsg('ファウル：相手にボールインハンド（9のみスポット戻し）');
-          switchTurn(); ballInHand=true; setBIHBanner(true);
-
-        } else {
-          if(pocketedThisShot.indexOf(9)!==-1){
-            addScore(currentPlayer,3);
-            showRackResult('9ボール達成！');
-          } else {
-            let gained=0;
-            for(let i=0;i<pocketedThisShot.length;i++){ gained += 1; }
-            if(gained>0) addScore(currentPlayer,gained);
-
-            if(!balls.some(function(b){ return !b.isCue; })){
-              addScore(currentPlayer,3);
-              showRackResult('全クリア！');
-            } else {
-              if(gained>0){
-                setMsg('+'+gained+'点 続行');
-              } else {
-                switchTurn();
-                setMsg((currentPlayer===1?p1nameEl.value:p2nameEl.value)+' の番');
-              }
-            }
-          }
-        }
-
-        firstContact=null; pocketedThisShot=[];
-        shotActive=false; requiredLowest=null; touchedRequired=false;
-        updateTargetLabel();
       }
     }
+  }
 
-    // ====== Prediction guides（薄い破線：入射→反射のみ） ======
-    function drawGuides(){
-      if(!guideToggle || !guideToggle.checked) return;
-      if(!aiming || !aiming.active) return;
-      if(gameOver) return;
-
-      const cue = balls.find(b=>b.isCue); if(!cue) return;
-      const dx = aiming.sx - aiming.mx, dy = aiming.sy - aiming.my; const dlen=Math.hypot(dx,dy); if(dlen<1) return;
-      const u={x:dx/dlen,y:dy/dlen}; const start={x:cue.x,y:cue.y};
-      const A=a-R, B=b-R;
-      const hit1 = rayEllipse(start,u,A,B);
-
-      ctx.save(); ctx.translate(cx,cy);
-      ctx.setLineDash([6,6]); ctx.globalAlpha=0.6; ctx.lineWidth=2; ctx.strokeStyle='#e5e7eb';
-
-      if(!hit1){
-        const far={x:start.x+u.x*1100, y:start.y+u.y*1100};
-        ctx.beginPath(); ctx.moveTo(start.x,start.y); ctx.lineTo(far.x,far.y); ctx.stroke();
-        ctx.restore(); ctx.setLineDash([]); ctx.globalAlpha=1; return;
+  // ショット終了
+  if(shotActive && allStopped()){
+    const foul=(requiredLowest!=null && !touchedRequired);
+    if(foul){
+      if(pocketedThisShot.includes(9)){ if(!balls.some(bb=>bb.id===9)){ balls.push({id:9,x:0,y:0,vx:0,vy:0,r:R,m:1,color:colors9[8],label:'9'}); } spotBall(9); }
+      addScore(currentPlayer,-1); setMsg('ファウル：相手にボールインハンド（9のみスポット戻し）'); switchTurn(); ballInHand=true; setBIHBanner(true);
+    } else {
+      if(pocketedThisShot.includes(9)){ addScore(currentPlayer,3); showRackResult('9ボール達成！'); }
+      else {
+        let gained=0; for(const _ of pocketedThisShot){ gained+=1; }
+        if(gained>0) addScore(currentPlayer,gained);
+        if(!balls.some(b=>!b.isCue)){ addScore(currentPlayer,3); showRackResult('全クリア！'); }
+        else { if(gained>0) setMsg('+'+gained+'点 続行'); else { switchTurn(); setMsg(playerName(currentPlayer)+' の番'); } }
       }
-
-      ctx.beginPath(); ctx.moveTo(start.x,start.y); ctx.lineTo(hit1.hit.x,hit1.hit.y); ctx.stroke();
-      ctx.setLineDash([]); ctx.fillStyle='rgba(229,231,235,0.6)'; ctx.beginPath(); ctx.arc(hit1.hit.x,hit1.hit.y,3,0,Math.PI*2); ctx.fill();
-
-      const rv=reflectVec(u.x,u.y,hit1.hit.x,hit1.hit.y,A,B);
-      const len=Math.hypot(rv.x,rv.y)||1; const dir={x:rv.x/len,y:rv.y/len};
-      const hit2=rayEllipse(hit1.hit,dir,A,B);
-      const end=hit2?hit2.hit:{x:hit1.hit.x+dir.x*700,y:hit1.hit.y+dir.y*700};
-
-      ctx.setLineDash([10,10]); ctx.globalAlpha=0.6; ctx.lineWidth=2; ctx.strokeStyle='rgba(245,158,11,0.6)';
-      ctx.beginPath(); ctx.moveTo(hit1.hit.x,hit1.hit.y); ctx.lineTo(end.x,end.y); ctx.stroke();
-
-      ctx.restore(); ctx.setLineDash([]); ctx.globalAlpha=1;
     }
+    firstContact=null; pocketedThisShot=[]; shotActive=false; requiredLowest=null; touchedRequired=false; updateTargetLabel();
+  }
 
-    // ====== Rendering ======
-    function draw(){
-      ctx.clearRect(0,0,W,H);
-      ctx.fillStyle='#0a5a2c'; ctx.fillRect(0,0,W,H);
+  // CPUは最後に呼ぶ
+  maybeCpuShoot();
+}
 
-      ctx.save(); ctx.translate(cx,cy);
-      ctx.beginPath(); ctx.ellipse(0,0,a,b,0,0,Math.PI*2);
-      ctx.strokeStyle='#77e0ff'; ctx.lineWidth=3; ctx.stroke();
+/* ===== Guides ===== */
+function drawGuides(){
+  if(!(guideToggle && guideToggle.checked)) return;
+  if(!(aiming && aiming.active)) return;
+  if(gameOver) return;
 
-      for(let i=0;i<pockets.length;i++){
-        const pk=pockets[i];
-        ctx.fillStyle='#0f172a'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R+3,0,Math.PI*2); ctx.fill();
-        ctx.fillStyle='#020617'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R,0,Math.PI*2); ctx.fill();
-      }
+  const cue=balls.find(b=>b.isCue); if(!cue) return;
+  const dx=aiming.sx-aiming.mx, dy=aiming.sy-aiming.my; const dlen=Math.hypot(dx,dy); if(dlen<1) return;
+  const u={x:dx/dlen,y:dy/dlen}; const start={x:cue.x,y:cue.y}; const A=a-R,B=b-R;
+  const hit1=rayEllipse(start,u,A,B);
 
-      const fcs = Math.sqrt(Math.max(0,a*a-b*b));
-      ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(-fcs,0,4,0,Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc( fcs,0,4,0,Math.PI*2); ctx.fill();
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.setLineDash([6,6]); ctx.globalAlpha=0.6; ctx.lineWidth=2; ctx.strokeStyle='#e5e7eb';
 
-      const targetId = shotActive ? ((requiredLowest != null) ? requiredLowest : lowest()) : lowest();
-      if(targetId!=null){
-        const tb=balls.find(function(b){return b.id===targetId;});
-        if(tb){
-          const pulse = 1 + 0.15*Math.sin(performance.now()/250);
-          ctx.save(); ctx.globalAlpha=0.9; ctx.strokeStyle='#38bdf8'; ctx.lineWidth=4;
-          ctx.beginPath(); ctx.arc(tb.x, tb.y, tb.r*1.9*pulse, 0, Math.PI*2); ctx.stroke();
-          ctx.globalAlpha=0.35; ctx.lineWidth=10;
-          ctx.beginPath(); ctx.arc(tb.x, tb.y, tb.r*2.6*pulse, 0, Math.PI*2); ctx.stroke();
-          ctx.restore();
-        }
-      }
+  if(!hit1){
+    const far={x:start.x+u.x*1100,y:start.y+u.y*1100}; ctx.beginPath(); ctx.moveTo(start.x,start.y); ctx.lineTo(far.x,far.y); ctx.stroke();
+    ctx.restore(); ctx.setLineDash([]); ctx.globalAlpha=1; return;
+  }
 
-      for(let i=0;i<balls.length;i++){
-        const b=balls[i];
-        ctx.fillStyle=b.color; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
-        if(!b.isCue && b.label){
-          ctx.fillStyle='#fff'; ctx.font='10px ui-monospace,Menlo,monospace';
-          ctx.textAlign='center'; ctx.textBaseline='middle';
-          ctx.fillText(b.label, b.x, b.y+0.5);
-        } else if(b.isCue){
-          ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1; ctx.stroke();
-        }
-      }
-      ctx.restore();
+  ctx.beginPath(); ctx.moveTo(start.x,start.y); ctx.lineTo(hit1.hit.x,hit1.hit.y); ctx.stroke();
+  ctx.setLineDash([]); ctx.fillStyle='rgba(229,231,235,0.6)'; ctx.beginPath(); ctx.arc(hit1.hit.x,hit1.hit.y,3,0,Math.PI*2); ctx.fill();
 
-      // ガイド＆ゲージ＆ターゲット表示更新
-      drawGuides();
-      drawPowerGauge();
-      updateTargetLabel();
-    }
+  const rv=reflectVec(u.x,u.y,hit1.hit.x,hit1.hit.y,A,B); const len=Math.hypot(rv.x,rv.y)||1; const dir={x:rv.x/len,y:rv.y/len};
+  const hit2=rayEllipse(hit1.hit,dir,A,B); const end=hit2?hit2.hit:{x:hit1.hit.x+dir.x*700,y:hit1.hit.y+dir.y*700};
+  ctx.setLineDash([10,10]); ctx.globalAlpha=0.6; ctx.lineWidth=2; ctx.strokeStyle='rgba(245,158,11,0.6)';
+  ctx.beginPath(); ctx.moveTo(hit1.hit.x,hit1.hit.y); ctx.lineTo(end.x,end.y); ctx.stroke();
 
-    // ====== Main loop ======
-    function loop(t){ const dt=Math.min(0.03, (t-last)/1000 || 0.016); last=t||0; if(running) update(dt); draw(); requestAnimationFrame(loop); }
-    requestAnimationFrame(loop);
+  ctx.restore(); ctx.setLineDash([]); ctx.globalAlpha=1;
+}
 
-    // Init
-    rack(); setTurnDisplay(currentPlayer);
-  </script>
+/* ===== Rendering ===== */
+function draw(){
+  ctx.clearRect(0,0,W,H); ctx.fillStyle='#0a5a2c'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.beginPath(); ctx.ellipse(0,0,a,b,0,0,Math.PI*2); ctx.strokeStyle='#77e0ff'; ctx.lineWidth=3; ctx.stroke();
+  for(const pk of pockets){ ctx.fillStyle='#0f172a'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R+3,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#020617'; ctx.beginPath(); ctx.arc(pk.x,pk.y,POCKET_R,0,Math.PI*2); ctx.fill(); }
+  const fcs=Math.sqrt(Math.max(0,a*a-b*b)); ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(-fcs,0,4,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc( fcs,0,4,0,Math.PI*2); ctx.fill();
+
+  const targetId=shotActive ? (requiredLowest ?? lowest()) : lowest();
+  if(targetId!=null){ const tb=balls.find(b=>b.id===targetId); if(tb){ const pulse=1+0.15*Math.sin(performance.now()/250); ctx.save(); ctx.globalAlpha=0.9; ctx.strokeStyle='#38bdf8'; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(tb.x,tb.y,tb.r*1.9*pulse,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=0.35; ctx.lineWidth=10; ctx.beginPath(); ctx.arc(tb.x,tb.y,tb.r*2.6*pulse,0,Math.PI*2); ctx.stroke(); ctx.restore(); } }
+
+  for(const b of balls){ ctx.fillStyle=b.color; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); if(!b.isCue && b.label){ ctx.fillStyle='#fff'; ctx.font='10px ui-monospace,Menlo,monospace'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(b.label, b.x, b.y+0.5); } if(b.isCue){ ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1; ctx.stroke(); } }
+  ctx.restore();
+
+  drawGuides();
+  drawPowerGauge();
+  updateTargetLabel();
+}
+
+/* ===== Main loop ===== */
+function loop(t){ const dt=Math.min(0.03,(t-last)/1000 || 0.016); last=t||0; if(running) update(dt); draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+/* 起動 */
+window.rack();
+setTurnDisplay(currentPlayer);
+
+</script>
 </body>
 </html>
